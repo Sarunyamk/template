@@ -1,0 +1,52 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: <project-repo-name>-project
+    restart: unless-stopped
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`<project_subdomain>.relearn.sol`)"
+      - "traefik.http.routers.app.entrypoints=web"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
+
+  db:
+    image: postgres:latest
+    container_name: <project-repo-name>-project-db
+    environment:
+      POSTGRES_USER: <project_subdomain>_db
+      POSTGRES_PASSWORD: supers3curepassword
+      POSTGRES_DB: <project_subdomain>_db
+    ports:
+      - "6600:5432"
+    restart: unless-stopped
+
+  dozzle:
+    image: amir20/dozzle:v8.9.1
+    container_name: <project_subdomain>_logs
+    restart: always
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.<project_subdomain>-logs-router.rule=Host(`<project_subdomain>-logs.relearn.sol`)"
+      - "traefik.http.routers.<project_subdomain>-logs-router.entrypoints=web"
+      - "traefik.http.services.<project_subdomain>-logs-service.loadbalancer.server.port=8080"
+
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--api.insecure=false"
+      - "--log.level=DEBUG"
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped

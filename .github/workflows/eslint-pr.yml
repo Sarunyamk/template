@@ -1,0 +1,139 @@
+name: ESLint Check
+
+on:
+  workflow_call:
+    inputs:
+      cache-key:
+        required: true
+        type: string
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  eslint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Restore cached environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: ${{ inputs.cache-key }}
+
+      - name: Run ESLint - Fix
+        id: eslint_fix
+        run: |
+          IS_ACTION=true pnpm lint:fix || true
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Configure git in submodules
+          git submodule foreach '
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          '
+
+      - name: Check for any changes
+        id: check_changes
+        run: |
+          # Update submodules first
+          git submodule update --init --recursive
+
+          # Enter each submodule and check for changes
+          git submodule foreach '
+            git add -A
+            if [ -n "$(git status --porcelain)" ]; then
+              git commit -m "ESLint: Auto-fixes"
+            fi
+          ' || true
+
+          # Check main repo status
+          git status --porcelain || true
+
+          # Set output based on both main repo and submodule changes
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get latest commit ID
+        id: get_commit
+        run: |
+          echo "COMMIT_ID=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          # Stage and commit submodule changes first
+          git submodule foreach '
+            if [ -n "$(git status --porcelain)" ]; then
+              git add -A
+              git commit -m "ESLint: Auto-fixes"
+              git push origin HEAD:$(git rev-parse --abbrev-ref HEAD)
+            fi
+          '
+
+          # Stage and commit main repo changes
+          git add -A
+          git commit -m "ESLint: Auto-fixes for ${{ steps.get_commit.outputs.COMMIT_ID }}"
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Run ESLint Strict - Check
+        id: eslint_check
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: |
+          IS_ACTION=true pnpm lint:strict > lint_output.txt || true
+          exit_code=$?
+          sed -i '1,3d' lint_output.txt
+          echo "exit_code=${exit_code}" >> $GITHUB_OUTPUT
+          echo "stdout<<EOF" >> $GITHUB_OUTPUT
+          cat lint_output.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          exit $exit_code
+
+      - name: Create PR for ESLint changes
+        if: ${{ steps.eslint_check.outcome == 'failure' }}
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: "ESLint: Auto-fixes for ${{ steps.get_commit.outputs.COMMIT_ID }}"
+          branch: eslint-fixes-${{ github.run_id }}
+          title: "ESLint: Auto-fixes for ${{ steps.get_commit.outputs.COMMIT_ID }}"
+          body: "ESLint auto-fix changes."
+          base: ${{ github.head_ref }}
+
+      - name: Post ESLint errors and warnings as PR comment
+        id: post_comment_error
+        if: ${{ steps.eslint_check.outputs.stdout != '' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: "❌ ESLint Check Failed"
+          recreate: true
+          message: |
+            ## ESLint check failed with errors and warnings
+            ```bash
+            ${{ steps.eslint_check.outputs.stdout }}
+            ```
+
+      - name: Post ESLint check completed successfully
+        id: post_comment_success
+        if: ${{ steps.eslint_check.outputs.stdout == '' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: "✅ ESLint Check Passed"
+          delete: true

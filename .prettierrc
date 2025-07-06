@@ -1,0 +1,11 @@
+{
+  "plugins": [
+    "prettier-plugin-organize-imports",
+    "prettier-plugin-packagejson",
+    "prettier-plugin-tailwindcss"
+  ],
+  "tabWidth": 2,
+  "tailwindFunctions": ["clsx", "cx", "cva"],
+  "tailwindAttributes": ["classNames"],
+  "endOfLine": "lf"
+}
